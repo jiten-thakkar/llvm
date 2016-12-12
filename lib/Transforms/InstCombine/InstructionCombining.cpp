@@ -2227,6 +2227,53 @@ Instruction *InstCombiner::visitBranchInst(BranchInst &BI) {
       return &BI;
     }
 
+  /*
+  looking for branch in this pattern 
+  %2 = add i32 %0, -1, !dbg !14
+  %3 = icmp ult i32 %2, 4, !dbg !14
+  br i1 %3, label %4, label %10, !dbg !14
+
+; <label>:4:                                      ; preds = %1
+  %5 = tail call { i32, i1 } @llvm.sadd.with.overflow.i32(i32 %0, i32 %0), !dbg !16
+  %6 = extractvalue { i32, i1 } %5, 0, !dbg !16
+  %7 = extractvalue { i32, i1 } %5, 1, !dbg !16
+  */
+  Value* LHS;
+  Value* param;
+  errs() << "\n\nin visit branch\n";
+  BI.dump();
+  if (match(&BI, m_Br(m_ICmp(IPred, m_Value(LHS), m_SpecificInt(4)), TrueDest, FalseDest))) {
+    //found potential branch
+    errs() << "\n\nfound our branch\n";
+    LHS->dump();
+    ConstantInt* constant;
+    if (match(LHS, m_Add(m_Value(param), m_ConstantInt(constant))) && constant->getSExtValue() == -1) {
+      //found the patter, now need to look for use of param in a sadd intrinsic in true branch
+      errs() << "\n\nit even reduces 1\n";
+      for (User* user: param->users()) {
+        //if(user->getParent() == TrueDest) {
+          //errs() << "\n\nfound user in truedest\n";
+          user->dump();
+          errs() << "\n\nblock dump\n\n";
+          TrueDest->dump();
+          IntrinsicInst * intri = dyn_cast<IntrinsicInst>(user);
+          if (intri && intri->getParent() == TrueDest && intri->getIntrinsicID() == Intrinsic::sadd_with_overflow
+              && (intri->getArgOperand(0) == intri->getOperand(1)) && intri->getOperand(0) == param) {
+              //found the sadd intrinsic, now make it dead by injecting a struct value vith normal adds and making the extractValue 
+              //instructions use it
+              errs() << "\n\nfound the sadd function, about to change it\n";
+              intri->dump();
+              Builder->SetInsertPoint(intri);
+              //Value* addInst = Builder->CreateAdd(param, param);
+              //addInst->takeName(intri);
+              Instruction* inst = CreateOverflowTuple(intri, Builder->CreateAdd(param, param), Builder->getFalse());
+              replaceInstUsesWith(*dyn_cast<Instruction>(intri), Builder->Insert(inst));
+              errs() << "\n\njust done with the changes\n";
+          }
+        //}
+      }
+    }
+  }
   return nullptr;
 }
 
